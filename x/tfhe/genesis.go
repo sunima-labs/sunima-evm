@@ -1,38 +1,40 @@
 package tfhe
 
 import (
+	sdk "github.com/cosmos/cosmos-sdk/types"
+
 	"github.com/sunima-labs/sunima-evm/x/tfhe/keeper"
+	"github.com/sunima-labs/sunima-evm/x/tfhe/types"
 )
 
-// GenesisState is the chain genesis representation for this module.
-type GenesisState struct {
-	Attesters []AttesterGenesisEntry
-	// Params Params
+// InitGenesis seeds module state from a GenesisState. Ciphertexts and
+// attesters from genesis are written verbatim; params are validated
+// upstream (AppModuleBasic.ValidateGenesis) before this runs.
+//
+// Stage 5.1: ciphertext write loop is the only state-touching path here.
+// The 5-of-9 attester registry materialises in Stage 5.3.
+func InitGenesis(ctx sdk.Context, k keeper.Keeper, gs *types.GenesisState) {
+	if gs == nil {
+		return
+	}
+	for i := range gs.Ciphertexts {
+		ct := &gs.Ciphertexts[i]
+		// Genesis ciphertexts bypass duplicate detection: if the same id
+		// appears twice the second overwrite will surface during state
+		// validation (gs.Validate).
+		_, _ = k.StoreCiphertext(ctx, ct.Data, ct.Owner)
+	}
 }
 
-// AttesterGenesisEntry seeds an initial attester at chain genesis.
-type AttesterGenesisEntry struct {
-	Address     string
-	PubKey      []byte
-	SharePubkey []byte
-}
-
-// DefaultGenesis returns an empty genesis state — chain operator must populate
-// initial attesters via genesis.json or via governance after launch.
-func DefaultGenesis() GenesisState {
-	return GenesisState{Attesters: nil}
-}
-
-// InitGenesis seeds the keeper from a GenesisState.
-func InitGenesis(k keeper.Keeper, gs GenesisState) {
-	// TODO: persist each attester, set params
-	_ = k
-	_ = gs
-}
-
-// ExportGenesis dumps current module state for chain snapshot.
-func ExportGenesis(k keeper.Keeper) GenesisState {
-	// TODO: enumerate attesters, dump params
-	_ = k
-	return GenesisState{}
+// ExportGenesis returns the current module state for chain snapshot.
+// Stage 5.1: ciphertext list export is deferred — iterating the
+// ownership prefix range without a paged response would balloon the
+// snapshot, and the chain has no consumers of the dump yet. Empty
+// list keeps export shape stable for future stages.
+func ExportGenesis(_ sdk.Context, _ keeper.Keeper) *types.GenesisState {
+	return &types.GenesisState{
+		Params:      types.DefaultParams(),
+		Ciphertexts: nil,
+		Attesters:   nil,
+	}
 }

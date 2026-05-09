@@ -1,14 +1,18 @@
 // Package keeper holds the x/tfhe state-touching logic.
 //
-// Stage 5.1 Week 2 (this file): keeper operates against the local
-// KVStore interface in store.go and delegates homomorphic ops to
-// internal/tfhebridge. No Cosmos SDK runtime dependency yet — that
-// arrives in Week 3 along with proto codegen and module wiring.
+// Stage 5.1 Week 3 Phase 2: keeper now operates against a real
+// Cosmos SDK store via sdk.Context.KVStore(storeKey). Unit tests
+// drive it through testutil.DefaultContext(t, key, tkey) — the same
+// API path the production chain uses.
 package keeper
 
 import (
 	"crypto/sha256"
 	"errors"
+
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
+	"github.com/cosmos/cosmos-sdk/codec"
+	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"github.com/sunima-labs/sunima-evm/internal/tfhebridge"
 	"github.com/sunima-labs/sunima-evm/x/tfhe/types"
@@ -21,35 +25,49 @@ const OpAdd = "add"
 // Keeper handles the x/tfhe module's state and dispatches homomorphic
 // operations to the FFI bridge.
 //
-// In Week 3 this struct gains storeKey + cdc + authority + AttesterRegistry
-// fields once Cosmos SDK is wired. For now it carries the FHE server key
-// directly — production storage layout (genesis import / governance update)
-// is decided in Week 3.
+// Stage 5.3 will add an AttesterRegistry field; Stage 5.4 will move
+// serverKey into params storage and reload it lazily.
 type Keeper struct {
+	cdc       codec.BinaryCodec
+	storeKey  storetypes.StoreKey
+	authority sdk.AccAddress
 	serverKey []byte // tfhe-rs ServerKey blob; required for homomorphic ops
 }
 
-// NewKeeper constructs a keeper. serverKey may be nil for read-only paths
-// (StoreCiphertext / GetCiphertext) — HomomorphicCompute returns
-// ErrServerKeyNotSet if invoked without one.
-func NewKeeper(serverKey []byte) Keeper {
-	return Keeper{serverKey: serverKey}
+// NewKeeper constructs a keeper. authority is the gov module account
+// for params updates and attester registration; serverKey may be nil for
+// read-only paths — HomomorphicCompute returns ErrServerKeyNotSet if
+// invoked without one.
+func NewKeeper(
+	cdc codec.BinaryCodec,
+	storeKey storetypes.StoreKey,
+	authority sdk.AccAddress,
+	serverKey []byte,
+) Keeper {
+	if err := sdk.VerifyAddressFormat(authority); err != nil {
+		panic(err)
+	}
+	return Keeper{cdc: cdc, storeKey: storeKey, authority: authority, serverKey: serverKey}
 }
+
+// Authority returns the configured authority address as a bech32 string,
+// matching the format used in MsgUpdateParams / MsgRegisterAttester.
+func (k Keeper) Authority() string { return k.authority.String() }
 
 // ServerKey exposes the configured server key for diagnostics/tests.
 func (k Keeper) ServerKey() []byte { return k.serverKey }
 
 // StoreCiphertext persists ciphertext addressed by sha256(ciphertext).
 // Returns the content-addressed id. If the same ciphertext is submitted
-// twice (by hash) the call returns ErrCiphertextAlreadyExists; the
-// caller can decide whether to surface or swallow that.
-func (k Keeper) StoreCiphertext(store KVStore, ciphertext []byte, owner string) ([]byte, error) {
+// twice (by hash) the call returns the existing id and ErrCiphertextAlreadyExists.
+func (k Keeper) StoreCiphertext(ctx sdk.Context, ciphertext []byte, owner string) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, types.ErrEmptyCiphertext
 	}
 	if owner == "" {
 		return nil, types.ErrEmptyOwner
 	}
+	store := ctx.KVStore(k.storeKey)
 	id := contentID(ciphertext)
 	ctKey := ciphertextStoreKey(id)
 	if store.Has(ctKey) {
@@ -63,10 +81,11 @@ func (k Keeper) StoreCiphertext(store KVStore, ciphertext []byte, owner string) 
 // GetCiphertext returns the stored ciphertext if `caller` owns it.
 // Non-owners receive ErrUnauthorized; missing rows receive
 // ErrCiphertextNotFound.
-func (k Keeper) GetCiphertext(store KVStore, id []byte, caller string) ([]byte, error) {
+func (k Keeper) GetCiphertext(ctx sdk.Context, id []byte, caller string) ([]byte, error) {
 	if len(id) == 0 {
 		return nil, types.ErrCiphertextNotFound
 	}
+	store := ctx.KVStore(k.storeKey)
 	ct := store.Get(ciphertextStoreKey(id))
 	if ct == nil {
 		return nil, types.ErrCiphertextNotFound
@@ -82,7 +101,7 @@ func (k Keeper) GetCiphertext(store KVStore, id []byte, caller string) ([]byte, 
 // input. The result is stored owned by `caller` and its id returned.
 //
 // For OpAdd: exactly two inputs, sums them via tfhebridge.AddU64.
-func (k Keeper) HomomorphicCompute(store KVStore, opType string, inputIDs [][]byte, caller string) ([]byte, error) {
+func (k Keeper) HomomorphicCompute(ctx sdk.Context, opType string, inputIDs [][]byte, caller string) ([]byte, error) {
 	if opType != OpAdd {
 		return nil, types.ErrInvalidOpType
 	}
@@ -92,11 +111,11 @@ func (k Keeper) HomomorphicCompute(store KVStore, opType string, inputIDs [][]by
 	if len(inputIDs) != 2 {
 		return nil, types.ErrInvalidInputCount
 	}
-	ctA, err := k.GetCiphertext(store, inputIDs[0], caller)
+	ctA, err := k.GetCiphertext(ctx, inputIDs[0], caller)
 	if err != nil {
 		return nil, err
 	}
-	ctB, err := k.GetCiphertext(store, inputIDs[1], caller)
+	ctB, err := k.GetCiphertext(ctx, inputIDs[1], caller)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +123,7 @@ func (k Keeper) HomomorphicCompute(store KVStore, opType string, inputIDs [][]by
 	if err != nil {
 		return nil, errors.Join(types.ErrInvalidCiphertext, err)
 	}
-	resultID, err := k.StoreCiphertext(store, result, caller)
+	resultID, err := k.StoreCiphertext(ctx, result, caller)
 	if err != nil && !errors.Is(err, types.ErrCiphertextAlreadyExists) {
 		return nil, err
 	}
@@ -113,9 +132,9 @@ func (k Keeper) HomomorphicCompute(store KVStore, opType string, inputIDs [][]by
 
 // VerifyAttestationQuorum is unchanged scaffold — implementation lands in
 // Stage 5.3 alongside the threshold-decryption flow.
-func (k Keeper) VerifyAttestationQuorum(_ []byte, _ [][]byte, _ [][]byte) error {
+func (k Keeper) VerifyAttestationQuorum(_ sdk.Context, _ []byte, _ [][]byte, _ [][]byte) error {
 	// TODO Stage 5.3: lookup registered attesters, verify each signature,
-	// require ≥5 distinct, then combine partials via tfhebridge.
+	// require >=5 distinct, then combine partials via tfhebridge.
 	return nil
 }
 

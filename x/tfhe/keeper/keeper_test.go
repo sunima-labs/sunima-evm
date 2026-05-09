@@ -7,6 +7,11 @@ import (
 	"sync"
 	"testing"
 
+	storetypes "github.com/cosmos/cosmos-sdk/store/v2/types"
+	sdk "github.com/cosmos/cosmos-sdk/types"
+	moduletestutil "github.com/cosmos/cosmos-sdk/types/module/testutil"
+	"github.com/cosmos/cosmos-sdk/testutil"
+
 	"github.com/sunima-labs/sunima-evm/internal/tfhebridge"
 	"github.com/sunima-labs/sunima-evm/x/tfhe/keeper"
 	"github.com/sunima-labs/sunima-evm/x/tfhe/types"
@@ -53,26 +58,38 @@ func mustDecrypt(t *testing.T, ck, ct []byte) uint64 {
 	return v
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// MemKVStore satisfies KVStore (compile-time check).
-// ──────────────────────────────────────────────────────────────────────────
+// setupKeeper builds a fresh in-memory keeper and a clean sdk.Context
+// for each test. Mirrors the cosmos-evm/x/vm pattern (testutil
+// .DefaultContext + storetypes.NewKVStoreKey).
+func setupKeeper(t *testing.T, withServerKey bool) (keeper.Keeper, sdk.Context) {
+	t.Helper()
+	key := storetypes.NewKVStoreKey(types.StoreKey)
+	tkey := storetypes.NewTransientStoreKey("transient_test")
+	testCtx := testutil.DefaultContext(key, tkey)
 
-var _ keeper.KVStore = (*keeper.MemKVStore)(nil)
+	encCfg := moduletestutil.MakeTestEncodingConfig()
+	authority := sdk.AccAddress("tfhe-authority-test-")
+
+	var sk []byte
+	if withServerKey {
+		_, sk = sharedKeys(t)
+	}
+	k := keeper.NewKeeper(encCfg.Codec, key, authority, sk)
+	return k, testCtx
+}
 
 // ──────────────────────────────────────────────────────────────────────────
 // StoreCiphertext / GetCiphertext
 // ──────────────────────────────────────────────────────────────────────────
 
 func TestStoreCiphertext_HappyPath(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	owner := "sunima1alice"
 
-	// store 10 distinct ciphertexts, each must round-trip via the keeper.
 	for i := uint64(1); i <= 10; i++ {
 		ct := mustEncrypt(t, ck, i)
-		id, err := k.StoreCiphertext(store, ct, owner)
+		id, err := k.StoreCiphertext(ctx, ct, owner)
 		if err != nil {
 			t.Fatalf("StoreCiphertext(i=%d): %v", i, err)
 		}
@@ -80,7 +97,7 @@ func TestStoreCiphertext_HappyPath(t *testing.T) {
 			t.Fatalf("expected 32-byte sha256 id, got %d bytes", len(id))
 		}
 
-		got, err := k.GetCiphertext(store, id, owner)
+		got, err := k.GetCiphertext(ctx, id, owner)
 		if err != nil {
 			t.Fatalf("GetCiphertext(i=%d): %v", i, err)
 		}
@@ -91,30 +108,27 @@ func TestStoreCiphertext_HappyPath(t *testing.T) {
 }
 
 func TestStoreCiphertext_EmptyInputs(t *testing.T) {
-	_, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	k, ctx := setupKeeper(t, true)
 
-	if _, err := k.StoreCiphertext(store, nil, "sunima1alice"); !errors.Is(err, types.ErrEmptyCiphertext) {
+	if _, err := k.StoreCiphertext(ctx, nil, "sunima1alice"); !errors.Is(err, types.ErrEmptyCiphertext) {
 		t.Fatalf("nil ct: want ErrEmptyCiphertext, got %v", err)
 	}
-	if _, err := k.StoreCiphertext(store, []byte{0x01}, ""); !errors.Is(err, types.ErrEmptyOwner) {
+	if _, err := k.StoreCiphertext(ctx, []byte{0x01}, ""); !errors.Is(err, types.ErrEmptyOwner) {
 		t.Fatalf("empty owner: want ErrEmptyOwner, got %v", err)
 	}
 }
 
 func TestStoreCiphertext_DuplicateRejected(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	owner := "sunima1alice"
 	ct := mustEncrypt(t, ck, 42)
 
-	id1, err := k.StoreCiphertext(store, ct, owner)
+	id1, err := k.StoreCiphertext(ctx, ct, owner)
 	if err != nil {
 		t.Fatalf("first store: %v", err)
 	}
-	id2, err := k.StoreCiphertext(store, ct, owner)
+	id2, err := k.StoreCiphertext(ctx, ct, owner)
 	if !errors.Is(err, types.ErrCiphertextAlreadyExists) {
 		t.Fatalf("second store: want ErrCiphertextAlreadyExists, got %v", err)
 	}
@@ -124,31 +138,27 @@ func TestStoreCiphertext_DuplicateRejected(t *testing.T) {
 }
 
 func TestGetCiphertext_NonOwnerRejected(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	alice, bob := "sunima1alice", "sunima1bob"
 
 	ct := mustEncrypt(t, ck, 7)
-	id, err := k.StoreCiphertext(store, ct, alice)
+	id, err := k.StoreCiphertext(ctx, ct, alice)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	if _, err := k.GetCiphertext(store, id, bob); !errors.Is(err, types.ErrUnauthorized) {
+	if _, err := k.GetCiphertext(ctx, id, bob); !errors.Is(err, types.ErrUnauthorized) {
 		t.Fatalf("bob should not read alice's ct, got err=%v", err)
 	}
-	if _, err := k.GetCiphertext(store, id, ""); !errors.Is(err, types.ErrUnauthorized) {
+	if _, err := k.GetCiphertext(ctx, id, ""); !errors.Is(err, types.ErrUnauthorized) {
 		t.Fatalf("empty caller should be rejected, got err=%v", err)
 	}
 }
 
 func TestGetCiphertext_NotFound(t *testing.T) {
-	_, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
-
+	k, ctx := setupKeeper(t, true)
 	missing := bytes.Repeat([]byte{0xab}, 32)
-	if _, err := k.GetCiphertext(store, missing, "sunima1alice"); !errors.Is(err, types.ErrCiphertextNotFound) {
+	if _, err := k.GetCiphertext(ctx, missing, "sunima1alice"); !errors.Is(err, types.ErrCiphertextNotFound) {
 		t.Fatalf("want ErrCiphertextNotFound, got %v", err)
 	}
 }
@@ -158,29 +168,27 @@ func TestGetCiphertext_NotFound(t *testing.T) {
 // ──────────────────────────────────────────────────────────────────────────
 
 func TestHomomorphicCompute_AddE2E(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	owner := "sunima1alice"
 
-	// 5 + 7 → 12, decrypted via the keeper-managed ciphertext.
 	ctA := mustEncrypt(t, ck, 5)
 	ctB := mustEncrypt(t, ck, 7)
-	idA, err := k.StoreCiphertext(store, ctA, owner)
+	idA, err := k.StoreCiphertext(ctx, ctA, owner)
 	if err != nil {
 		t.Fatalf("store A: %v", err)
 	}
-	idB, err := k.StoreCiphertext(store, ctB, owner)
+	idB, err := k.StoreCiphertext(ctx, ctB, owner)
 	if err != nil {
 		t.Fatalf("store B: %v", err)
 	}
 
-	resultID, err := k.HomomorphicCompute(store, keeper.OpAdd, [][]byte{idA, idB}, owner)
+	resultID, err := k.HomomorphicCompute(ctx, keeper.OpAdd, [][]byte{idA, idB}, owner)
 	if err != nil {
 		t.Fatalf("HomomorphicCompute: %v", err)
 	}
 
-	resultCT, err := k.GetCiphertext(store, resultID, owner)
+	resultCT, err := k.GetCiphertext(ctx, resultID, owner)
 	if err != nil {
 		t.Fatalf("get result: %v", err)
 	}
@@ -191,13 +199,10 @@ func TestHomomorphicCompute_AddE2E(t *testing.T) {
 }
 
 func TestHomomorphicCompute_Variations(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	owner := "sunima1alice"
 
-	// Smaller table to keep keygen overhead bounded — cases use the shared
-	// server key but each encrypts fresh ciphertexts.
 	cases := []struct{ a, b, want uint64 }{
 		{0, 0, 0},
 		{1, 0, 1},
@@ -205,19 +210,19 @@ func TestHomomorphicCompute_Variations(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(fmt.Sprintf("%d_plus_%d", tc.a, tc.b), func(t *testing.T) {
-			idA, err := k.StoreCiphertext(store, mustEncrypt(t, ck, tc.a), owner)
+			idA, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, tc.a), owner)
 			if err != nil && !errors.Is(err, types.ErrCiphertextAlreadyExists) {
 				t.Fatalf("store a: %v", err)
 			}
-			idB, err := k.StoreCiphertext(store, mustEncrypt(t, ck, tc.b), owner)
+			idB, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, tc.b), owner)
 			if err != nil && !errors.Is(err, types.ErrCiphertextAlreadyExists) {
 				t.Fatalf("store b: %v", err)
 			}
-			resID, err := k.HomomorphicCompute(store, keeper.OpAdd, [][]byte{idA, idB}, owner)
+			resID, err := k.HomomorphicCompute(ctx, keeper.OpAdd, [][]byte{idA, idB}, owner)
 			if err != nil {
 				t.Fatalf("compute: %v", err)
 			}
-			resCT, err := k.GetCiphertext(store, resID, owner)
+			resCT, err := k.GetCiphertext(ctx, resID, owner)
 			if err != nil {
 				t.Fatalf("get result: %v", err)
 			}
@@ -230,124 +235,58 @@ func TestHomomorphicCompute_Variations(t *testing.T) {
 }
 
 func TestHomomorphicCompute_NonOwnerRejected(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	alice, bob := "sunima1alice", "sunima1bob"
 
-	idA, err := k.StoreCiphertext(store, mustEncrypt(t, ck, 9), alice)
+	idA, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, 9), alice)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	idB, err := k.StoreCiphertext(store, mustEncrypt(t, ck, 11), alice)
+	idB, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, 11), alice)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	if _, err := k.HomomorphicCompute(store, keeper.OpAdd, [][]byte{idA, idB}, bob); !errors.Is(err, types.ErrUnauthorized) {
+	if _, err := k.HomomorphicCompute(ctx, keeper.OpAdd, [][]byte{idA, idB}, bob); !errors.Is(err, types.ErrUnauthorized) {
 		t.Fatalf("bob computing on alice's inputs: want ErrUnauthorized, got %v", err)
 	}
 }
 
 func TestHomomorphicCompute_InvalidInputs(t *testing.T) {
-	ck, sk := sharedKeys(t)
-	k := keeper.NewKeeper(sk)
-	store := keeper.NewMemKVStore()
+	ck, _ := sharedKeys(t)
+	k, ctx := setupKeeper(t, true)
 	owner := "sunima1alice"
 
-	idA, err := k.StoreCiphertext(store, mustEncrypt(t, ck, 1), owner)
+	idA, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, 1), owner)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
 
-	// unknown op
-	if _, err := k.HomomorphicCompute(store, "mul", [][]byte{idA, idA}, owner); !errors.Is(err, types.ErrInvalidOpType) {
+	if _, err := k.HomomorphicCompute(ctx, "mul", [][]byte{idA, idA}, owner); !errors.Is(err, types.ErrInvalidOpType) {
 		t.Fatalf("unknown op: want ErrInvalidOpType, got %v", err)
 	}
-
-	// wrong input count (1, not 2)
-	if _, err := k.HomomorphicCompute(store, keeper.OpAdd, [][]byte{idA}, owner); !errors.Is(err, types.ErrInvalidInputCount) {
+	if _, err := k.HomomorphicCompute(ctx, keeper.OpAdd, [][]byte{idA}, owner); !errors.Is(err, types.ErrInvalidInputCount) {
 		t.Fatalf("1 input: want ErrInvalidInputCount, got %v", err)
 	}
-
-	// 3 inputs
-	if _, err := k.HomomorphicCompute(store, keeper.OpAdd, [][]byte{idA, idA, idA}, owner); !errors.Is(err, types.ErrInvalidInputCount) {
+	if _, err := k.HomomorphicCompute(ctx, keeper.OpAdd, [][]byte{idA, idA, idA}, owner); !errors.Is(err, types.ErrInvalidInputCount) {
 		t.Fatalf("3 inputs: want ErrInvalidInputCount, got %v", err)
 	}
 }
 
 func TestHomomorphicCompute_NoServerKey(t *testing.T) {
 	ck, _ := sharedKeys(t)
-	k := keeper.NewKeeper(nil) // explicitly no server key
-	store := keeper.NewMemKVStore()
+	k, ctx := setupKeeper(t, false) // explicitly no server key
 	owner := "sunima1alice"
 
-	idA, err := k.StoreCiphertext(store, mustEncrypt(t, ck, 1), owner)
+	idA, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, 1), owner)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	idB, err := k.StoreCiphertext(store, mustEncrypt(t, ck, 2), owner)
+	idB, err := k.StoreCiphertext(ctx, mustEncrypt(t, ck, 2), owner)
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
-	if _, err := k.HomomorphicCompute(store, keeper.OpAdd, [][]byte{idA, idB}, owner); !errors.Is(err, types.ErrServerKeyNotSet) {
+	if _, err := k.HomomorphicCompute(ctx, keeper.OpAdd, [][]byte{idA, idB}, owner); !errors.Is(err, types.ErrServerKeyNotSet) {
 		t.Fatalf("want ErrServerKeyNotSet, got %v", err)
-	}
-}
-
-// ──────────────────────────────────────────────────────────────────────────
-// MemKVStore basics — sanity checks on the test-double itself.
-// ──────────────────────────────────────────────────────────────────────────
-
-func TestMemKVStore_BasicOps(t *testing.T) {
-	s := keeper.NewMemKVStore()
-	k1, v1 := []byte{0x01, 0xaa}, []byte("hello")
-	k2, v2 := []byte{0x01, 0xbb}, []byte("world")
-
-	if s.Has(k1) {
-		t.Fatal("empty store should not Has(k1)")
-	}
-	s.Set(k1, v1)
-	s.Set(k2, v2)
-
-	if got := s.Get(k1); !bytes.Equal(got, v1) {
-		t.Fatalf("Get(k1): %q vs %q", got, v1)
-	}
-	if !s.Has(k2) {
-		t.Fatal("Has(k2) after Set should be true")
-	}
-
-	// Mutating the value passed to Set must not affect what's stored.
-	v1[0] = 'X'
-	if got := s.Get(k1); got[0] == 'X' {
-		t.Fatal("Set must copy value, not retain caller's slice")
-	}
-
-	s.Delete(k1)
-	if s.Has(k1) || s.Get(k1) != nil {
-		t.Fatal("Delete(k1) failed")
-	}
-}
-
-func TestMemKVStore_IteratorRange(t *testing.T) {
-	s := keeper.NewMemKVStore()
-	s.Set([]byte("a"), []byte("1"))
-	s.Set([]byte("b"), []byte("2"))
-	s.Set([]byte("c"), []byte("3"))
-	s.Set([]byte("d"), []byte("4"))
-
-	it := s.Iterator([]byte("b"), []byte("d")) // half-open [b, d) → b, c
-	defer it.Close()
-	keys := []string{}
-	for ; it.Valid(); it.Next() {
-		keys = append(keys, string(it.Key()))
-	}
-	want := []string{"b", "c"}
-	if len(keys) != len(want) {
-		t.Fatalf("iterator: got %v, want %v", keys, want)
-	}
-	for i := range want {
-		if keys[i] != want[i] {
-			t.Fatalf("iterator: got %v, want %v", keys, want)
-		}
 	}
 }
