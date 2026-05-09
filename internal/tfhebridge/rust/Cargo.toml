@@ -1,0 +1,18 @@
+[package]
+name = "tfhebridge"
+version = "0.1.0"
+edition = "2021"
+description = "FFI bridge between Go (Cosmos x/tfhe module) and tfhe-rs"
+
+[lib]
+name = "tfhebridge"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tfhe = { version = "1.6.1", features = ["integer"] }
+bincode = "1.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

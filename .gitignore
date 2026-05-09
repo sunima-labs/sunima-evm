@@ -3,3 +3,11 @@ result-*
 .direnv
 .envrc
 *.log
+
+# Rust build artifacts (tfhebridge cdylib)
+internal/tfhebridge/rust/target/
+internal/tfhebridge/rust/Cargo.lock
+
+# Go build artifacts
+/sunimad-evm
+/cmd/*/main

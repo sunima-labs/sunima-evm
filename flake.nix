@@ -5,9 +5,11 @@
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
 
-    # Pinned cosmos-evm fork — sync via update-cosmos-evm.sh
+    # Pinned cosmos-evm fork — local clone for dev (SSH path for CI later)
+    # Local clone must exist at /root/projects/cosmos-evm at the expected rev.
+    # Sync via scripts/sync-cosmos-evm.sh.
     cosmos-evm = {
-      url = "git+ssh://git@github.com/sunima-labs/cosmos-evm.git?ref=main&rev=e118daef885f4a43f456cf881fa9fe6806778c6d";
+      url = "git+file:///root/projects/cosmos-evm?ref=main&rev=e118daef885f4a43f456cf881fa9fe6806778c6d";
       flake = false;
     };
   };
@@ -27,11 +29,19 @@
             pkgs.buf
             pkgs.golangci-lint
             pkgs.jq
+            # Rust toolchain for tfhe-rs FFI bridge
+            pkgs.rustc
+            pkgs.cargo
+            pkgs.clang
+            pkgs.pkg-config
           ];
           shellHook = ''
             export COSMOS_EVM_SRC=${cosmos-evm}
+            export CGO_ENABLED=1
             echo "Sunima EVM dev shell"
-            echo "  go: $(go version)"
+            echo "  go:    $(go version)"
+            echo "  rustc: $(rustc --version)"
+            echo "  cargo: $(cargo --version)"
             echo "  cosmos-evm pinned: $COSMOS_EVM_SRC"
           '';
         };
