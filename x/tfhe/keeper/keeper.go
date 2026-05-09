@@ -31,13 +31,18 @@ type Keeper struct {
 	cdc       codec.BinaryCodec
 	storeKey  storetypes.StoreKey
 	authority sdk.AccAddress
-	serverKey []byte // tfhe-rs ServerKey blob; required for homomorphic ops
+	// serverKey is held behind a pointer so callers (e.g. genesis)
+	// can swap the underlying bytes after the keeper has already been
+	// embedded in app.AppModule by value. The pointer itself is
+	// allocated in NewKeeper and never reassigned.
+	serverKey *[]byte
 }
 
 // NewKeeper constructs a keeper. authority is the gov module account
 // for params updates and attester registration; serverKey may be nil for
 // read-only paths — HomomorphicCompute returns ErrServerKeyNotSet if
-// invoked without one.
+// invoked without one. Callers can install or rotate the key later via
+// SetServerKey (typically from genesis Params).
 func NewKeeper(
 	cdc codec.BinaryCodec,
 	storeKey storetypes.StoreKey,
@@ -47,7 +52,8 @@ func NewKeeper(
 	if err := sdk.VerifyAddressFormat(authority); err != nil {
 		panic(err)
 	}
-	return Keeper{cdc: cdc, storeKey: storeKey, authority: authority, serverKey: serverKey}
+	sk := serverKey
+	return Keeper{cdc: cdc, storeKey: storeKey, authority: authority, serverKey: &sk}
 }
 
 // Authority returns the configured authority address as a bech32 string,
@@ -55,7 +61,27 @@ func NewKeeper(
 func (k Keeper) Authority() string { return k.authority.String() }
 
 // ServerKey exposes the configured server key for diagnostics/tests.
-func (k Keeper) ServerKey() []byte { return k.serverKey }
+func (k Keeper) ServerKey() []byte {
+	if k.serverKey == nil {
+		return nil
+	}
+	return *k.serverKey
+}
+
+// SetServerKey installs a new server key on the keeper. Intended for
+// genesis-time injection from Params.ServerKey and future governance
+// rotation. nil clears the key (HomomorphicCompute then returns
+// ErrServerKeyNotSet).
+func (k Keeper) SetServerKey(sk []byte) {
+	if k.serverKey == nil {
+		// Defensive: a keeper constructed outside NewKeeper. Allocate
+		// so the install does not panic on nil-deref.
+		buf := sk
+		k.serverKey = &buf
+		return
+	}
+	*k.serverKey = sk
+}
 
 // StoreCiphertext persists ciphertext addressed by sha256(ciphertext).
 // Returns the content-addressed id. If the same ciphertext is submitted
@@ -105,7 +131,8 @@ func (k Keeper) HomomorphicCompute(ctx sdk.Context, opType string, inputIDs [][]
 	if opType != OpAdd {
 		return nil, types.ErrInvalidOpType
 	}
-	if len(k.serverKey) == 0 {
+	sk := k.ServerKey()
+	if len(sk) == 0 {
 		return nil, types.ErrServerKeyNotSet
 	}
 	if len(inputIDs) != 2 {
@@ -119,7 +146,7 @@ func (k Keeper) HomomorphicCompute(ctx sdk.Context, opType string, inputIDs [][]
 	if err != nil {
 		return nil, err
 	}
-	result, err := tfhebridge.AddU64(k.serverKey, ctA, ctB)
+	result, err := tfhebridge.AddU64(sk, ctA, ctB)
 	if err != nil {
 		return nil, errors.Join(types.ErrInvalidCiphertext, err)
 	}

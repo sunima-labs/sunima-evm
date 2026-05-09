@@ -17,6 +17,12 @@ func InitGenesis(ctx sdk.Context, k keeper.Keeper, gs *types.GenesisState) {
 	if gs == nil {
 		return
 	}
+	// Install the genesis server key onto the keeper so HomomorphicCompute
+	// has access to it from the very first block. Operators ship the key
+	// inside genesis.json under app_state.tfhe.params.server_key.
+	if len(gs.Params.ServerKey) > 0 {
+		k.SetServerKey(gs.Params.ServerKey)
+	}
 	for i := range gs.Ciphertexts {
 		ct := &gs.Ciphertexts[i]
 		// Genesis ciphertexts bypass duplicate detection: if the same id

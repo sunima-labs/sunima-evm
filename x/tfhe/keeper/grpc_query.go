@@ -68,7 +68,7 @@ func (q querier) Params(_ context.Context, _ *types.QueryParamsRequest) (*types.
 	p := types.DefaultParams()
 	// Replace server_key with its size in bytes so callers see "set/unset"
 	// without paying the bandwidth.
-	if len(q.keeper.serverKey) > 0 {
+	if len(q.keeper.ServerKey()) > 0 {
 		p.ServerKey = nil // keep wire format predictable; size lives in events later
 	}
 	return &types.QueryParamsResponse{Params: p}, nil
