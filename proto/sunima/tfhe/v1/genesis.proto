@@ -1,0 +1,16 @@
+syntax = "proto3";
+package sunima.tfhe.v1;
+
+import "gogoproto/gogo.proto";
+import "sunima/tfhe/v1/tfhe.proto";
+
+option go_package = "github.com/sunima-labs/sunima-evm/x/tfhe/types";
+
+// GenesisState is the x/tfhe module state at chain genesis.
+message GenesisState {
+  Params params = 1 [ (gogoproto.nullable) = false ];
+  // ciphertexts may be empty at genesis; populated during state migrations.
+  repeated Ciphertext ciphertexts = 2 [ (gogoproto.nullable) = false ];
+  // attesters seeds the initial threshold-decryption quorum.
+  repeated Attester attesters = 3 [ (gogoproto.nullable) = false ];
+}

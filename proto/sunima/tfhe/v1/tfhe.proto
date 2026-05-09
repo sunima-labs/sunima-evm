@@ -1,0 +1,66 @@
+syntax = "proto3";
+package sunima.tfhe.v1;
+
+import "amino/amino.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+
+option go_package = "github.com/sunima-labs/sunima-evm/x/tfhe/types";
+
+// Ciphertext is a stored TFHE ciphertext addressed by sha256(data).
+message Ciphertext {
+  // id is sha256(data); 32 bytes.
+  bytes id = 1;
+  // data is the bincode-serialised tfhe-rs ciphertext blob.
+  bytes data = 2;
+  // owner is the bech32 address that submitted the deposit.
+  string owner = 3 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  // created_at is the unix nanos at which the ciphertext was stored.
+  int64 created_at = 4;
+}
+
+// Attester is a registered member of the threshold-decryption quorum.
+// 5-of-9 quorum logic lives in Stage 5.3 and is not exercised in Stage 5.1.
+message Attester {
+  // address is the attester's bech32 address.
+  string address = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  // pubkey is the ed25519 attestation signing key.
+  bytes pubkey = 2;
+  // share_pubkey verifies the attester's threshold share in the FHE keyset.
+  bytes share_pubkey = 3;
+  // registered_at is the unix nanos at which the attester was added.
+  int64 registered_at = 4;
+}
+
+// DecryptionRequest tracks a pending threshold-decryption flow.
+message DecryptionRequest {
+  // id uniquely identifies this request (random 32 bytes).
+  bytes id = 1;
+  // ciphertext_id is the target ciphertext.
+  bytes ciphertext_id = 2;
+  // recipient is the bech32 address that will receive the plaintext.
+  string recipient = 3 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  // partials is the list of submitted partial decryptions.
+  repeated bytes partials = 4;
+  // attesters is the list of bech32 addresses of submitting attesters.
+  repeated string attesters = 5 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  // status: 0 pending, 1 quorum_reached, 2 delivered, 3 expired.
+  uint32 status = 6;
+  // expires_at is the unix nanos after which the request is invalid.
+  int64 expires_at = 7;
+}
+
+// Params defines the parameters for the x/tfhe module.
+message Params {
+  option (amino.name) = "sunima/x/tfhe/Params";
+
+  // min_attesters is the threshold for decryption quorum (typically 5 of 9).
+  uint32 min_attesters = 1;
+  // decryption_window_blocks is the number of blocks a DecryptionRequest
+  // remains open before transitioning to expired.
+  uint64 decryption_window_blocks = 2;
+  // server_key is the bincode-serialised tfhe-rs server key, governance-set.
+  // Production layout may move this to a dedicated module-account paged store
+  // in a future stage if the blob outgrows what params can carry comfortably.
+  bytes server_key = 3;
+}

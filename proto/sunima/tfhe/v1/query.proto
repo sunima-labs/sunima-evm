@@ -1,0 +1,74 @@
+syntax = "proto3";
+package sunima.tfhe.v1;
+
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "google/api/annotations.proto";
+import "sunima/tfhe/v1/tfhe.proto";
+
+option go_package = "github.com/sunima-labs/sunima-evm/x/tfhe/types";
+
+// Query defines the x/tfhe query service.
+service Query {
+  // CiphertextById returns a stored ciphertext by its content hash.
+  rpc CiphertextById(QueryCiphertextByIdRequest) returns (QueryCiphertextByIdResponse) {
+    option (google.api.http).get = "/sunima/tfhe/v1/ciphertext/{id}";
+  }
+
+  // OwnedCiphertexts lists ciphertext ids owned by a given address.
+  rpc OwnedCiphertexts(QueryOwnedCiphertextsRequest) returns (QueryOwnedCiphertextsResponse) {
+    option (google.api.http).get = "/sunima/tfhe/v1/owned/{owner}";
+  }
+
+  // Attesters lists registered attesters.
+  rpc Attesters(QueryAttestersRequest) returns (QueryAttestersResponse) {
+    option (google.api.http).get = "/sunima/tfhe/v1/attesters";
+  }
+
+  // DecryptionRequest returns the status of a pending decryption flow.
+  rpc DecryptionRequest(QueryDecryptionRequestRequest) returns (QueryDecryptionRequestResponse) {
+    option (google.api.http).get = "/sunima/tfhe/v1/decryption_request/{id}";
+  }
+
+  // Params returns the module parameters.
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/sunima/tfhe/v1/params";
+  }
+}
+
+message QueryCiphertextByIdRequest {
+  // id is the 32-byte sha256 content address (hex-encoded in the URL).
+  bytes id = 1;
+}
+
+message QueryCiphertextByIdResponse {
+  Ciphertext ciphertext = 1 [ (gogoproto.nullable) = false ];
+}
+
+message QueryOwnedCiphertextsRequest {
+  string owner = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+}
+
+message QueryOwnedCiphertextsResponse {
+  repeated bytes ids = 1;
+}
+
+message QueryAttestersRequest {}
+
+message QueryAttestersResponse {
+  repeated Attester attesters = 1 [ (gogoproto.nullable) = false ];
+}
+
+message QueryDecryptionRequestRequest {
+  bytes id = 1;
+}
+
+message QueryDecryptionRequestResponse {
+  DecryptionRequest request = 1 [ (gogoproto.nullable) = false ];
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [ (gogoproto.nullable) = false ];
+}

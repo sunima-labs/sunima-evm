@@ -38,6 +38,10 @@
           shellHook = ''
             export COSMOS_EVM_SRC=${cosmos-evm}
             export CGO_ENABLED=1
+            # protoc-gen-gocosmos and protoc-gen-grpc-gateway are go-installed
+            # under $GOPATH/bin (default /root/go/bin); buf needs them on PATH
+            # to run `buf generate` against the proto/ tree.
+            export PATH="$(go env GOPATH)/bin:$PATH"
             echo "Sunima EVM dev shell"
             echo "  go:    $(go version)"
             echo "  rustc: $(rustc --version)"

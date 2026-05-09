@@ -1,0 +1,117 @@
+syntax = "proto3";
+package sunima.tfhe.v1;
+
+import "amino/amino.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+import "gogoproto/gogo.proto";
+import "sunima/tfhe/v1/tfhe.proto";
+
+option go_package = "github.com/sunima-labs/sunima-evm/x/tfhe/types";
+
+// Msg defines the x/tfhe Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  // EncryptedDeposit submits a TFHE ciphertext to the module's vault. The
+  // caller becomes its owner. Returns the content-addressed id.
+  rpc EncryptedDeposit(MsgEncryptedDeposit) returns (MsgEncryptedDepositResponse);
+
+  // ComputeOnEncrypted requests a homomorphic operation on stored
+  // ciphertexts owned by the caller. Stage 5.1: only "add" supported.
+  rpc ComputeOnEncrypted(MsgComputeOnEncrypted) returns (MsgComputeOnEncryptedResponse);
+
+  // RequestDecryption opens a pending threshold-decryption request. The
+  // 5-of-9 quorum flow itself lands in Stage 5.3.
+  rpc RequestDecryption(MsgRequestDecryption) returns (MsgRequestDecryptionResponse);
+
+  // SubmitAttestation contributes one partial decryption + signature
+  // toward an open DecryptionRequest. Stage 5.3.
+  rpc SubmitAttestation(MsgSubmitAttestation) returns (MsgSubmitAttestationResponse);
+
+  // RegisterAttester adds a new attester to the quorum. Authority is the
+  // x/gov module account.
+  rpc RegisterAttester(MsgRegisterAttester) returns (MsgRegisterAttesterResponse);
+
+  // UpdateParams updates the x/tfhe parameters via governance.
+  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
+}
+
+message MsgEncryptedDeposit {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name) = "sunima/x/tfhe/MsgEncryptedDeposit";
+
+  string sender = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  bytes ciphertext = 2;
+}
+
+message MsgEncryptedDepositResponse {
+  bytes id = 1;
+}
+
+message MsgComputeOnEncrypted {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name) = "sunima/x/tfhe/MsgComputeOnEncrypted";
+
+  string sender = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  repeated bytes input_ids = 2;
+  // operation_type: "add" for Stage 5.1; "mul"/"compare" arrive in Stage 5.4.
+  string operation_type = 3;
+  // output_owner defaults to sender if empty.
+  string output_owner = 4 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+}
+
+message MsgComputeOnEncryptedResponse {
+  bytes result_id = 1;
+}
+
+message MsgRequestDecryption {
+  option (cosmos.msg.v1.signer) = "sender";
+  option (amino.name) = "sunima/x/tfhe/MsgRequestDecryption";
+
+  string sender = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  bytes ciphertext_id = 2;
+  string recipient = 3 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+}
+
+message MsgRequestDecryptionResponse {
+  bytes request_id = 1;
+}
+
+message MsgSubmitAttestation {
+  option (cosmos.msg.v1.signer) = "attester";
+  option (amino.name) = "sunima/x/tfhe/MsgSubmitAttestation";
+
+  string attester = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  bytes request_id = 2;
+  bytes partial_decrypt = 3;
+  // signature over (request_id || partial_decrypt) under the attester's pubkey.
+  bytes signature = 4;
+}
+
+message MsgSubmitAttestationResponse {
+  bool quorum_reached = 1;
+}
+
+message MsgRegisterAttester {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "sunima/x/tfhe/MsgRegisterAttester";
+
+  // authority is the x/gov module account.
+  string authority = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  string attester_addr = 2 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  bytes pubkey = 3;
+  bytes share_pubkey = 4;
+}
+
+message MsgRegisterAttesterResponse {}
+
+message MsgUpdateParams {
+  option (cosmos.msg.v1.signer) = "authority";
+  option (amino.name) = "sunima/x/tfhe/MsgUpdateParams";
+
+  string authority = 1 [ (cosmos_proto.scalar) = "cosmos.AddressString" ];
+  Params params = 2 [ (gogoproto.nullable) = false ];
+}
+
+message MsgUpdateParamsResponse {}
